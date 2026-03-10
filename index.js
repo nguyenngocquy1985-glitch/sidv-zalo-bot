@@ -47,6 +47,10 @@ async function main() {
   }
 
   console.log('🔄 Đang kết nối Zalo...');
+  // Debug: kiểm tra creds
+  console.log('DEBUG creds keys:', creds ? Object.keys(creds) : 'NULL');
+  console.log('DEBUG imei:', creds?.imei ? creds.imei.slice(0,8)+'...' : 'MISSING');
+  console.log('DEBUG cookie type:', Array.isArray(creds?.cookie) ? 'Array['+creds.cookie.length+']' : typeof creds?.cookie);
   const zalo = new Zalo({ logging: true });
   const api  = await zalo.login(creds);
 
