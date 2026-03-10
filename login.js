@@ -9,7 +9,7 @@
  */
 
 require('dotenv').config();
-const { Zalo } = require('zca-js');
+const { Zalo, LoginQRCallbackEventType } = require('zca-js');
 const fs = require('fs');
 const path = require('path');
 
@@ -21,16 +21,28 @@ async function login() {
   console.log('='.repeat(50));
   console.log('\n📱 Chuẩn bị quét QR code...\n');
 
-  const zalo = new Zalo({}, undefined, {
-    logging: false,
+  const zalo = new Zalo({ logging: true });
+  let savedCreds = null;
+
+  // QR login với callback để capture credentials
+  const api = await zalo.loginQR({}, async (event) => {
+    if (event.type === LoginQRCallbackEventType.QRCodeGenerated) {
+      // Lưu QR ra file và mở tự động
+      await event.actions.saveToFile('qr.png');
+      try {
+        const { execSync } = require('child_process');
+        execSync('start "" "' + path.join(__dirname, 'qr.png') + '"', { windowsHide: true });
+      } catch(e) {}
+    } else if (event.type === LoginQRCallbackEventType.QRCodeExpired) {
+      // Tự động tạo lại QR mới
+      event.actions.retry();
+    } else if (event.type === LoginQRCallbackEventType.GotLoginInfo) {
+      savedCreds = event.data; // { cookie, imei, userAgent }
+      fs.writeFileSync(COOKIE_FILE, JSON.stringify(savedCreds, null, 2), 'utf8');
+    }
   });
 
-  // QR login — in QR code ra terminal
-  const api = await zalo.loginQR();
-
-  // Lưu session
-  const creds = zalo.getCredentials();
-  fs.writeFileSync(COOKIE_FILE, JSON.stringify(creds, null, 2), 'utf8');
+  if (!savedCreds) throw new Error('Không lấy được credentials sau khi đăng nhập');
 
   console.log('\n✅ Đăng nhập thành công!');
   console.log(`📁 Session đã lưu vào: ${COOKIE_FILE}`);

@@ -1,3 +1,10 @@
 node_modules/
 .env
 cookies.json
+qr.png
+_check_api.js
+_find_url.js
+_read_url.js
+_run_login.ps1
+_set_vars.js
+_upload_cookies.js
