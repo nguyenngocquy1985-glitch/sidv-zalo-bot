@@ -47,8 +47,8 @@ async function main() {
   }
 
   console.log('🔄 Đang kết nối Zalo...');
-  const zalo = new Zalo(creds);
-  const api  = await zalo.login();
+  const zalo = new Zalo({ logging: true });
+  const api  = await zalo.login(creds);
 
   console.log('✅ Đã kết nối Zalo thành công!');
   console.log('📩 Đang lắng nghe tin nhắn có file Excel...\n');
