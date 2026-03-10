@@ -1,0 +1,19 @@
+{
+  "name": "sidv-zalo-bot",
+  "version": "1.0.0",
+  "description": "Bot nhận bảng kê hãng tàu qua Zalo → đẩy lên tracker SIDV",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "login": "node login.js"
+  },
+  "dependencies": {
+    "zca-js": "^2.0.0",
+    "xlsx": "^0.18.5",
+    "node-fetch": "^2.7.0",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
