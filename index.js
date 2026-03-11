@@ -19,7 +19,6 @@ const COOKIE_FILE = path.join(__dirname, 'cookies.json');
 
 // ─── Tải credentials từ env (Railway) hoặc file local ─────────────────────
 function loadCredentials() {
-  // Ưu tiên env var (dùng trên server Railway)
   if (process.env.ZALO_COOKIES) {
     try {
       const decoded = Buffer.from(process.env.ZALO_COOKIES, 'base64').toString('utf8');
@@ -29,7 +28,6 @@ function loadCredentials() {
       process.exit(1);
     }
   }
-  // Fallback: file local (sau khi chạy login.js)
   if (fs.existsSync(COOKIE_FILE)) {
     return JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf8'));
   }
@@ -53,79 +51,95 @@ async function main() {
   console.log('✅ Đã kết nối Zalo thành công!');
   console.log('📩 Đang lắng nghe tin nhắn có file Excel...\n');
 
+  // ─── Listener disconnected: Zalo có thể kick bot nếu mở Zalo Web song song ──
+  api.listener.on('disconnected', () => {
+    console.error('⚠️  LISTENER BỊ NGẮT KẾT NỐI! Có thể do đang mở Zalo Web trên trình duyệt.');
+    console.error('   Đóng Zalo Web và restart bot để khắc phục.');
+  });
+
   // ─── Xử lý tin nhắn đến ───────────────────────────────────────────────
   api.listener.on('message', async (message) => {
     try {
-      const attachments = message.data?.attachments || [];
-      const threadId    = message.threadId;
-      const threadType  = message.type;       // ThreadType.User | ThreadType.Group
-      const senderName  = message.data?.dName || message.data?.senderName || 'Người gửi';
+      const threadId   = message.threadId;
+      const threadType = message.type;   // ThreadType.User | ThreadType.Group
+      const senderName = message.data?.dName || message.data?.senderName || 'Người gửi';
+      const msgType    = message.data?.msgType || '';
+      const content    = message.data?.content;
 
-      for (const att of attachments) {
-        // Chỉ xử lý file đính kèm
-        if (att.type !== 'file') continue;
+      // ── DEBUG: log mọi tin nhắn nhận được ──
+      const isText = typeof content === 'string';
+      console.log(`📨 [${threadType === ThreadType.Group ? 'GRP' : 'USR'}] ${senderName} | msgType="${msgType}" | content=${isText ? `"${String(content).slice(0,50)}"` : `{${Object.keys(content||{}).join(',')}}`}`);
 
-        const fileName = att.payload?.name || att.payload?.title || 'unknown';
-        const fileUrl  = att.payload?.url  || att.payload?.href;
+      // ── Chỉ xử lý tin nhắn có content là object (file/media/link) ──
+      if (!content || typeof content !== 'object') return;
 
-        // Chỉ xử lý Excel
-        if (!/\.(xlsx|xls)$/i.test(fileName)) {
-          console.log(`⏭️  Bỏ qua file không phải Excel: ${fileName}`);
-          continue;
-        }
+      // ── Tìm URL file và tên file trong content ──
+      // Zalo truyền file qua content.href (URL download) và content.title (tên file)
+      const fileUrl  = content.href  || content.url  || content.fileUrl;
+      const fileName = content.title || content.name || content.fileName || 'unknown';
 
-        console.log(`\n📎 Nhận file từ ${senderName}: ${fileName}`);
-
-        // Thông báo đang xử lý
-        await sendMsg(api, `⏳ Đang xử lý file "${fileName}"...`, threadId, threadType);
-
-        try {
-          // Download file
-          const resp   = await fetch(fileUrl);
-          const buffer = Buffer.from(await resp.arrayBuffer());
-
-          // Parse Excel
-          const parsed = parseExcelBuffer(buffer, fileName);
-
-          if (!parsed.containers.length) {
-            await sendMsg(api,
-              `⚠️ File "${fileName}" không có container nào hợp lệ.\nKiểm tra lại định dạng file.`,
-              threadId, threadType
-            );
-            continue;
-          }
-
-          // Đẩy lên Google Sheets
-          await addSessionToSheets({
-            sessionName: parsed.sessionName,
-            containers:  parsed.containers,
-          });
-
-          // Phân loại 20'/40'
-          const c20 = parsed.containers.filter(c => c.type === '20').length;
-          const c40 = parsed.containers.filter(c => c.type === '40').length;
-          const typeStr = [c20 && `${c20} cont 20'`, c40 && `${c40} cont 40'`].filter(Boolean).join(' + ');
-
-          // Xác nhận thành công
-          await sendMsg(api,
-            `✅ ĐÃ NHẬN BẢNG KÊ\n` +
-            `📋 ${parsed.sessionName}\n` +
-            `📦 ${parsed.containers.length} container (${typeStr})\n` +
-            `🕐 ${new Date().toLocaleString('vi-VN')}\n\n` +
-            `👉 Mở tracker → bấm "📥 Kiểm tra bảng kê từ Zalo"`,
-            threadId, threadType
-          );
-
-          console.log(`✅ Xử lý thành công: ${parsed.sessionName} (${parsed.containers.length} cont)`);
-
-        } catch (err) {
-          console.error(`❌ Lỗi xử lý file ${fileName}:`, err.message);
-          await sendMsg(api,
-            `❌ Lỗi khi xử lý file "${fileName}":\n${err.message}`,
-            threadId, threadType
-          );
-        }
+      if (!fileUrl) {
+        console.log(`   ↳ content là object nhưng không có URL file, bỏ qua.`);
+        console.log(`   ↳ content keys: ${JSON.stringify(content).slice(0, 200)}`);
+        return;
       }
+
+      // ── Chỉ xử lý Excel ──
+      if (!/\.(xlsx|xls)$/i.test(fileName)) {
+        console.log(`⏭️  Bỏ qua file không phải Excel: ${fileName}`);
+        return;
+      }
+
+      console.log(`\n📎 Nhận file từ ${senderName}: ${fileName}`);
+      await sendMsg(api, `⏳ Đang xử lý file "${fileName}"...`, threadId, threadType);
+
+      try {
+        // Download file
+        const resp   = await fetch(fileUrl);
+        const buffer = Buffer.from(await resp.arrayBuffer());
+
+        // Parse Excel
+        const parsed = parseExcelBuffer(buffer, fileName);
+
+        if (!parsed.containers.length) {
+          await sendMsg(api,
+            `⚠️ File "${fileName}" không có container nào hợp lệ.\nKiểm tra lại định dạng file.`,
+            threadId, threadType
+          );
+          return;
+        }
+
+        // Đẩy lên Google Sheets
+        await addSessionToSheets({
+          sessionName: parsed.sessionName,
+          containers:  parsed.containers,
+        });
+
+        // Phân loại 20'/40'
+        const c20 = parsed.containers.filter(c => c.type === '20').length;
+        const c40 = parsed.containers.filter(c => c.type === '40').length;
+        const typeStr = [c20 && `${c20} cont 20'`, c40 && `${c40} cont 40'`].filter(Boolean).join(' + ');
+
+        // Xác nhận thành công
+        await sendMsg(api,
+          `✅ ĐÃ NHẬN BẢNG KÊ\n` +
+          `📋 ${parsed.sessionName}\n` +
+          `📦 ${parsed.containers.length} container (${typeStr})\n` +
+          `🕐 ${new Date().toLocaleString('vi-VN')}\n\n` +
+          `👉 Mở tracker → bấm "📥 Kiểm tra bảng kê từ Zalo"`,
+          threadId, threadType
+        );
+
+        console.log(`✅ Xử lý thành công: ${parsed.sessionName} (${parsed.containers.length} cont)`);
+
+      } catch (err) {
+        console.error(`❌ Lỗi xử lý file ${fileName}:`, err.message);
+        await sendMsg(api,
+          `❌ Lỗi khi xử lý file "${fileName}":\n${err.message}`,
+          threadId, threadType
+        );
+      }
+
     } catch (err) {
       console.error('❌ Lỗi xử lý tin nhắn:', err.message);
     }
