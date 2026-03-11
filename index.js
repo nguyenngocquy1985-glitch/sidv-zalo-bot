@@ -2,8 +2,10 @@
  * index.js — SIDV Zalo Bot
  * Nhận file Excel bảng kê hãng tàu qua Zalo → parse → đẩy lên Google Sheets
  *
- * Chạy: node index.js
- * Deploy: Railway / Render (set env vars SHEETS_URL + ZALO_COOKIES)
+ * Env vars:
+ *   ZALO_COOKIES     - base64 JSON credentials
+ *   SHEETS_URL       - Google Apps Script URL
+ *   ALLOWED_GROUP_ID - (tuỳ chọn) chỉ nhận file từ nhóm này
  */
 
 require('dotenv').config();
@@ -17,14 +19,14 @@ const { addSessionToSheets } = require('./sheets');
 
 const COOKIE_FILE = path.join(__dirname, 'cookies.json');
 
-// ─── Tải credentials từ env (Railway) hoặc file local ─────────────────────
+// ─── Tải credentials ────────────────────────────────────────────────────────
 function loadCredentials() {
   if (process.env.ZALO_COOKIES) {
     try {
       const decoded = Buffer.from(process.env.ZALO_COOKIES, 'base64').toString('utf8');
       return JSON.parse(decoded);
     } catch {
-      console.error('❌ ZALO_COOKIES env var không hợp lệ (phải là JSON base64)');
+      console.error('❌ ZALO_COOKIES env var không hợp lệ');
       process.exit(1);
     }
   }
@@ -34,14 +36,19 @@ function loadCredentials() {
   return null;
 }
 
-// ─── Main ──────────────────────────────────────────────────────────────────
+// ─── Main ───────────────────────────────────────────────────────────────────
 async function main() {
   const creds = loadCredentials();
-
   if (!creds) {
-    console.error('❌ Chưa có thông tin đăng nhập Zalo.');
-    console.error('   → Chạy "npm run login" để đăng nhập lần đầu.');
+    console.error('❌ Chưa có thông tin đăng nhập Zalo. Chạy "npm run login" trước.');
     process.exit(1);
+  }
+
+  const ALLOWED_GROUP = process.env.ALLOWED_GROUP_ID || '';
+  if (ALLOWED_GROUP) {
+    console.log(`🎯 Chỉ nhận file từ nhóm: ${ALLOWED_GROUP}`);
+  } else {
+    console.log('📡 Nhận file từ TẤT CẢ nhóm (chưa cấu hình ALLOWED_GROUP_ID)');
   }
 
   console.log('🔄 Đang kết nối Zalo...');
@@ -51,36 +58,41 @@ async function main() {
   console.log('✅ Đã kết nối Zalo thành công!');
   console.log('📩 Đang lắng nghe tin nhắn có file Excel...\n');
 
-  // ─── Listener disconnected: Zalo có thể kick bot nếu mở Zalo Web song song ──
+  // ─── Cảnh báo nếu bị ngắt kết nối ─────────────────────────────────────
   api.listener.on('disconnected', () => {
-    console.error('⚠️  LISTENER BỊ NGẮT KẾT NỐI! Có thể do đang mở Zalo Web trên trình duyệt.');
-    console.error('   Đóng Zalo Web và restart bot để khắc phục.');
+    console.error('⚠️  LISTENER BỊ NGẮT! Đóng Zalo Web trên trình duyệt nếu đang mở.');
   });
 
-  // ─── Xử lý tin nhắn đến ───────────────────────────────────────────────
+  // ─── Xử lý tin nhắn ───────────────────────────────────────────────────
   api.listener.on('message', async (message) => {
     try {
       const threadId   = message.threadId;
-      const threadType = message.type;   // ThreadType.User | ThreadType.Group
+      const threadType = message.type;
       const senderName = message.data?.dName || message.data?.senderName || 'Người gửi';
       const msgType    = message.data?.msgType || '';
       const content    = message.data?.content;
+      const isGroup    = threadType === ThreadType.Group;
 
-      // ── DEBUG: log mọi tin nhắn nhận được ──
-      const isText = typeof content === 'string';
-      console.log(`📨 [${threadType === ThreadType.Group ? 'GRP' : 'USR'}] ${senderName} | msgType="${msgType}" | content=${isText ? `"${String(content).slice(0,50)}"` : `{${Object.keys(content||{}).join(',')}}`}`);
+      // ── Log mọi tin nhắn (để tìm Group ID) ──
+      console.log(`📨 [${isGroup ? 'GRP' : 'USR'}] threadId=${threadId} | ${senderName} | msgType="${msgType}"`);
 
-      // ── Chỉ xử lý tin nhắn có content là object (file/media/link) ──
+      // ── Filter: chỉ xử lý nhóm được phép (nếu đã cấu hình) ──
+      if (ALLOWED_GROUP && isGroup && threadId !== ALLOWED_GROUP) {
+        return; // bỏ qua nhóm khác, không cần log thêm
+      }
+
+      // ── Chỉ xử lý khi content là object (file/ảnh/voice, không phải text) ──
       if (!content || typeof content !== 'object') return;
 
-      // ── Tìm URL file và tên file trong content ──
-      // Zalo truyền file qua content.href (URL download) và content.title (tên file)
+      // ── Tìm URL và tên file trong content ──
       const fileUrl  = content.href  || content.url  || content.fileUrl;
       const fileName = content.title || content.name || content.fileName || 'unknown';
 
       if (!fileUrl) {
-        console.log(`   ↳ content là object nhưng không có URL file, bỏ qua.`);
-        console.log(`   ↳ content keys: ${JSON.stringify(content).slice(0, 200)}`);
+        // Log cấu trúc content để debug khi cần
+        if (msgType === 'share.file') {
+          console.log(`   ↳ share.file nhưng không tìm thấy URL. Keys: ${Object.keys(content).join(',')}`);
+        }
         return;
       }
 
@@ -90,11 +102,11 @@ async function main() {
         return;
       }
 
-      console.log(`\n📎 Nhận file từ ${senderName}: ${fileName}`);
+      console.log(`\n📎 Nhận file từ ${senderName} (nhóm: ${threadId}): ${fileName}`);
       await sendMsg(api, `⏳ Đang xử lý file "${fileName}"...`, threadId, threadType);
 
       try {
-        // Download file
+        // Download
         const resp   = await fetch(fileUrl);
         const buffer = Buffer.from(await resp.arrayBuffer());
 
@@ -110,17 +122,18 @@ async function main() {
         }
 
         // Đẩy lên Google Sheets
-        await addSessionToSheets({
-          sessionName: parsed.sessionName,
-          containers:  parsed.containers,
-        });
+        await addSessionToSheets({ sessionName: parsed.sessionName, containers: parsed.containers });
 
-        // Phân loại 20'/40'
+        // Thống kê 20'/40'
         const c20 = parsed.containers.filter(c => c.type === '20').length;
         const c40 = parsed.containers.filter(c => c.type === '40').length;
-        const typeStr = [c20 && `${c20} cont 20'`, c40 && `${c40} cont 40'`].filter(Boolean).join(' + ');
+        const cUnk= parsed.containers.filter(c => !c.type).length;
+        const typeStr = [
+          c20 && `${c20} cont 20'`,
+          c40 && `${c40} cont 40'`,
+          cUnk && `${cUnk} cont ?`
+        ].filter(Boolean).join(' + ');
 
-        // Xác nhận thành công
         await sendMsg(api,
           `✅ ĐÃ NHẬN BẢNG KÊ\n` +
           `📋 ${parsed.sessionName}\n` +
@@ -134,10 +147,7 @@ async function main() {
 
       } catch (err) {
         console.error(`❌ Lỗi xử lý file ${fileName}:`, err.message);
-        await sendMsg(api,
-          `❌ Lỗi khi xử lý file "${fileName}":\n${err.message}`,
-          threadId, threadType
-        );
+        await sendMsg(api, `❌ Lỗi khi xử lý file "${fileName}":\n${err.message}`, threadId, threadType);
       }
 
     } catch (err) {
@@ -147,7 +157,6 @@ async function main() {
 
   api.listener.start();
 
-  // Giữ bot chạy liên tục
   process.on('SIGINT', () => {
     console.log('\n🛑 Đang dừng bot...');
     api.listener.stop();
@@ -155,12 +164,12 @@ async function main() {
   });
 }
 
-// ─── Helper: gửi tin nhắn ─────────────────────────────────────────────────
+// ─── Helper gửi tin nhắn ───────────────────────────────────────────────────
 async function sendMsg(api, text, threadId, threadType) {
   try {
     await api.sendMessage({ msg: text }, threadId, threadType);
   } catch (err) {
-    console.error('⚠️  Không gửi được tin nhắn phản hồi:', err.message);
+    console.error('⚠️  Không gửi được phản hồi:', err.message);
   }
 }
 
