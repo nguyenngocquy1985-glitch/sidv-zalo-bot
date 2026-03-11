@@ -175,18 +175,24 @@ function scheduleDailyReport(api) {
     console.log('⚠️  ALLOWED_GROUP_ID chưa set — bỏ qua lịch báo cáo sáng');
     return;
   }
-  let lastDay = -1;
-  console.log('⏰ Lịch báo cáo sáng 07:05 hàng ngày → nhóm', GROUP_ID);
+  const reported = new Set(); // key: "ngày-giờ" — tránh gửi 2 lần
+  console.log('⏰ Lịch báo cáo 07:05 và 18:00 hàng ngày → nhóm', GROUP_ID);
 
   setInterval(async () => {
     // Lấy giờ VN (UTC+7)
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
     const h = now.getHours(), m = now.getMinutes(), d = now.getDate();
-    if (h === 7 && m === 5 && d !== lastDay) {
-      lastDay = d;
-      console.log('[DailyReport] 07:05 — Gửi báo cáo sáng...');
+    const is0705 = (h === 7  && m === 5);
+    const is1800 = (h === 18 && m === 0);
+    const key = `${d}-${h}`;
+
+    if ((is0705 || is1800) && !reported.has(key)) {
+      reported.add(key);
+      console.log(`[DailyReport] ${h}:${m.toString().padStart(2,'0')} — Gửi báo cáo...`);
       await sendDailyReport(api, GROUP_ID);
     }
+    // Dọn key cũ (chỉ giữ của ngày hôm nay)
+    for (const k of reported) { if (!k.startsWith(`${d}-`)) reported.delete(k); }
   }, 30000); // kiểm tra mỗi 30 giây
 }
 
