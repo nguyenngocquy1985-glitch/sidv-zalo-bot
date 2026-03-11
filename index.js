@@ -81,6 +81,16 @@ async function main() {
         return; // bỏ qua nhóm khác, không cần log thêm
       }
 
+      // ── Lệnh text: !baocao ──
+      if (typeof content === 'string') {
+        const cmd = content.trim().toLowerCase();
+        if (cmd === '!baocao' || cmd === 'baocao') {
+          console.log(`[CMD] !baocao từ ${senderName}`);
+          await sendDailyReport(api, threadId);
+        }
+        return;
+      }
+
       // ── Chỉ xử lý khi content là object (file/ảnh/voice, không phải text) ──
       if (!content || typeof content !== 'object') return;
 
@@ -157,6 +167,22 @@ async function main() {
 
   api.listener.start();
 
+  // ─── HTTP server để trigger từ ngoài ────────────────────────────────────
+  const http     = require('http');
+  const PORT     = process.env.PORT || 3000;
+  const GROUP_ID = process.env.ALLOWED_GROUP_ID || '';
+  http.createServer(async (req, res) => {
+    if (req.method === 'POST' && req.url === '/send-report') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      console.log('[HTTP] /send-report triggered');
+      if (GROUP_ID) await sendDailyReport(api, GROUP_ID);
+      else console.warn('[HTTP] ALLOWED_GROUP_ID chưa set');
+    } else {
+      res.writeHead(200); res.end('SIDV Bot OK');
+    }
+  }).listen(PORT, () => console.log(`🌐 HTTP server on port ${PORT}`));
+
   // ─── Lịch báo cáo sáng 07:05 ────────────────────────────────────────────
   scheduleDailyReport(api);
 
@@ -219,7 +245,8 @@ async function sendDailyReport(api, groupId) {
       return;
     }
 
-    const lines = [`📊 BÁO CÁO CONTAINER SIDV`, `📅 ${dateStr} — 07:05`, ``];
+    const timeStr = `${now.getHours()}:${now.getMinutes().toString().padStart(2,'0')}`;
+    const lines = [`📊 BÁO CÁO CONTAINER SIDV`, `📅 ${dateStr} — ${timeStr}`, ``];
 
     // Chi tiết từng session
     if (stats.sessions && stats.sessions.length > 0) {
