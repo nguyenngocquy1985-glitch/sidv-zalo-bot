@@ -157,11 +157,92 @@ async function main() {
 
   api.listener.start();
 
+  // ─── Lịch báo cáo sáng 07:05 ────────────────────────────────────────────
+  scheduleDailyReport(api);
+
   process.on('SIGINT', () => {
     console.log('\n🛑 Đang dừng bot...');
     api.listener.stop();
     process.exit(0);
   });
+}
+
+// ─── Báo cáo sáng 07:05 ─────────────────────────────────────────────────────
+
+function scheduleDailyReport(api) {
+  const GROUP_ID = process.env.ALLOWED_GROUP_ID || '';
+  if (!GROUP_ID) {
+    console.log('⚠️  ALLOWED_GROUP_ID chưa set — bỏ qua lịch báo cáo sáng');
+    return;
+  }
+  let lastDay = -1;
+  console.log('⏰ Lịch báo cáo sáng 07:05 hàng ngày → nhóm', GROUP_ID);
+
+  setInterval(async () => {
+    // Lấy giờ VN (UTC+7)
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    const h = now.getHours(), m = now.getMinutes(), d = now.getDate();
+    if (h === 7 && m === 5 && d !== lastDay) {
+      lastDay = d;
+      console.log('[DailyReport] 07:05 — Gửi báo cáo sáng...');
+      await sendDailyReport(api, GROUP_ID);
+    }
+  }, 30000); // kiểm tra mỗi 30 giây
+}
+
+async function fetchStats() {
+  const url = process.env.SHEETS_URL + '?action=getStats';
+  const res  = await fetch(url);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const text = await res.text();
+  return JSON.parse(text);
+}
+
+async function sendDailyReport(api, groupId) {
+  try {
+    const stats = await fetchStats();
+    const now   = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    const days  = ['CN','T2','T3','T4','T5','T6','T7'];
+    const dateStr = `${days[now.getDay()]}, ${now.getDate()}/${now.getMonth()+1}/${now.getFullYear()}`;
+
+    if (!stats.ok || !stats.total) {
+      await api.sendMessage(
+        { msg: `📊 BÁO CÁO SIDV — ${dateStr}\n⚠️ Chưa có dữ liệu. Mở tracker để cập nhật.` },
+        groupId, ThreadType.Group
+      );
+      return;
+    }
+
+    const lines = [`📊 BÁO CÁO CONTAINER SIDV`, `📅 ${dateStr} — 07:05`, ``];
+
+    // Chi tiết từng session
+    if (stats.sessions && stats.sessions.length > 0) {
+      stats.sessions.forEach(s => {
+        const pct    = s.total ? Math.round(s.done / s.total * 100) : 0;
+        const status = s.remaining === 0 ? '✅' : '🔄';
+        lines.push(`${status} ${s.name}`);
+        lines.push(`   ${s.done}/${s.total} cont — còn ${s.remaining} (${pct}%)`);
+      });
+      lines.push('');
+    }
+
+    lines.push(`✅ Đã kéo:  ${stats.done} cont`);
+    lines.push(`🔄 Còn lại: ${stats.remaining} cont`);
+    lines.push(`📦 Tổng:    ${stats.total} cont`);
+    if (stats.updatedAt) lines.push(`🕐 ${stats.updatedAt}`);
+
+    await api.sendMessage({ msg: lines.join('\n') }, groupId, ThreadType.Group);
+    console.log('[DailyReport] ✅ Đã gửi báo cáo sáng');
+
+  } catch (err) {
+    console.error('[DailyReport] ❌ Lỗi:', err.message);
+    try {
+      await api.sendMessage(
+        { msg: `⚠️ Lỗi đọc báo cáo SIDV: ${err.message}` },
+        groupId, ThreadType.Group
+      );
+    } catch {}
+  }
 }
 
 // ─── Helper gửi tin nhắn ───────────────────────────────────────────────────
