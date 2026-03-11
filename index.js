@@ -47,7 +47,7 @@ async function main() {
   }
 
   console.log('🔄 Đang kết nối Zalo...');
-  const zalo = new Zalo({ logging: true });
+  const zalo = new Zalo({ logging: true, selfListen: true });
   const api  = await zalo.login(creds);
 
   console.log('✅ Đã kết nối Zalo thành công!');
