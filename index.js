@@ -13,11 +13,28 @@ const { Zalo, ThreadType } = require('zca-js');
 const fetch = require('node-fetch');
 const fs    = require('fs');
 const path  = require('path');
+const http  = require('http');
 
 const { parseExcelBuffer } = require('./parser');
 const { addSessionToSheets } = require('./sheets');
 
 const COOKIE_FILE = path.join(__dirname, 'cookies.json');
+
+// ─── HTTP server khởi động NGAY (trước Zalo login) để Railway healthcheck OK ─
+let _botApi    = null;
+let _botGroup  = '';
+const PORT = process.env.PORT || 3000;
+http.createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/send-report') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    console.log('[HTTP] /send-report triggered');
+    if (_botApi && _botGroup) await sendDailyReport(_botApi, _botGroup).catch(e => console.error('[HTTP] Lỗi:', e.message));
+    else console.warn('[HTTP] Bot chưa ready');
+  } else {
+    res.writeHead(200); res.end('SIDV Bot OK');
+  }
+}).listen(PORT, () => console.log('🌐 HTTP server on port ' + PORT));
 
 // ─── Tải credentials ────────────────────────────────────────────────────────
 function loadCredentials() {
@@ -167,21 +184,9 @@ async function main() {
 
   api.listener.start();
 
-  // ─── HTTP server để trigger từ ngoài ────────────────────────────────────
-  const http     = require('http');
-  const PORT     = process.env.PORT || 3000;
-  const GROUP_ID = process.env.ALLOWED_GROUP_ID || '';
-  http.createServer(async (req, res) => {
-    if (req.method === 'POST' && req.url === '/send-report') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-      console.log('[HTTP] /send-report triggered');
-      if (GROUP_ID) await sendDailyReport(api, GROUP_ID);
-      else console.warn('[HTTP] ALLOWED_GROUP_ID chưa set');
-    } else {
-      res.writeHead(200); res.end('SIDV Bot OK');
-    }
-  }).listen(PORT, () => console.log(`🌐 HTTP server on port ${PORT}`));
+  // Gán api vào biến global để HTTP server dùng được
+  _botApi   = api;
+  _botGroup = process.env.ALLOWED_GROUP_ID || '';
 
   // ─── Lịch báo cáo sáng 07:05 ────────────────────────────────────────────
   scheduleDailyReport(api);
