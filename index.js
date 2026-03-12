@@ -120,8 +120,11 @@ async function main() {
       }
 
       // ── Lệnh text: !setgroup / !baocao / !ncc ──
-      if (typeof content === 'string') {
-        const cmd = content.trim().toLowerCase();
+      // content có thể là string (DM) hoặc object (group: {text:..., msg:...})
+      const textBody = typeof content === 'string' ? content
+        : (content?.text || content?.msg || content?.message || null);
+      if (textBody && typeof textBody === 'string') {
+        const cmd = textBody.trim().toLowerCase();
 
         // ── !setgroup — đăng ký nhóm hiện tại làm nhóm chính ──
         if (cmd === '!setgroup' && isGroup) {
