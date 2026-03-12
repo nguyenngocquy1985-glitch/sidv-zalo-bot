@@ -67,7 +67,21 @@ async function main() {
     process.exit(1);
   }
 
-  const ALLOWED_GROUP = process.env.ALLOWED_GROUP_ID || '';
+  // ── Load allowed group: ưu tiên env → fallback Sheets ──
+  let ALLOWED_GROUP = process.env.ALLOWED_GROUP_ID || '';
+  if (!ALLOWED_GROUP && process.env.SHEETS_URL) {
+    try {
+      console.log('🔍 Đang tải bot config từ Google Sheets...');
+      const cfgRes = await fetch(process.env.SHEETS_URL + '?action=getBotConfig');
+      const cfgData = JSON.parse(await cfgRes.text());
+      if (cfgData.ok && cfgData.config && cfgData.config.bot_allowed_group) {
+        ALLOWED_GROUP = cfgData.config.bot_allowed_group;
+        console.log(`🎯 Loaded từ Sheets: ALLOWED_GROUP = ${ALLOWED_GROUP}`);
+      }
+    } catch (err) {
+      console.warn('⚠️  Không đọc được bot config từ Sheets:', err.message);
+    }
+  }
   if (ALLOWED_GROUP) {
     console.log(`🎯 Chỉ nhận file từ nhóm: ${ALLOWED_GROUP}`);
   } else {
@@ -104,9 +118,30 @@ async function main() {
         return; // bỏ qua nhóm khác, không cần log thêm
       }
 
-      // ── Lệnh text: !baocao / !ncc ──
+      // ── Lệnh text: !setgroup / !baocao / !ncc ──
       if (typeof content === 'string') {
         const cmd = content.trim().toLowerCase();
+
+        // ── !setgroup — đăng ký nhóm hiện tại làm nhóm chính ──
+        if (cmd === '!setgroup' && isGroup) {
+          console.log(`[CMD] !setgroup từ ${senderName} trong nhóm ${threadId}`);
+          ALLOWED_GROUP = threadId;
+          _botGroup = threadId;
+          // Lưu vào Google Sheets (persistent)
+          try {
+            await fetch(process.env.SHEETS_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'setBotConfig', entries: { bot_allowed_group: threadId } })
+            });
+            await sendMsg(api, `✅ Đã đăng ký nhóm này làm nhóm chính!\n🆔 Group ID: ${threadId}\n\nBot sẽ CHỈ nhận file Excel và gửi báo cáo trong nhóm này.`, threadId, threadType);
+            console.log(`✅ Đã lưu ALLOWED_GROUP = ${threadId} vào Sheets`);
+          } catch (err) {
+            await sendMsg(api, `⚠️ Đã set nhóm tạm thời (mất khi restart).\nLỗi lưu Sheets: ${err.message}`, threadId, threadType);
+          }
+          return;
+        }
+
         if (cmd === '!baocao' || cmd === 'baocao') {
           console.log(`[CMD] !baocao từ ${senderName}`);
           await sendDailyReport(api, threadId);
@@ -200,7 +235,7 @@ async function main() {
 
   // Gán api vào biến global để HTTP server dùng được
   _botApi   = api;
-  _botGroup = process.env.ALLOWED_GROUP_ID || '';
+  _botGroup = ALLOWED_GROUP; // đã load từ env hoặc Sheets ở trên
 
   // ─── Kiểm tra ngay khi khởi động: nếu trễ ≤30 phút so với giờ định kỳ → gửi luôn
   const startNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
