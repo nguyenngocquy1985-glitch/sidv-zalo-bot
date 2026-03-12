@@ -116,20 +116,25 @@ async function main() {
       const fileName = content.title || content.name || content.fileName || 'unknown';
 
       if (!fileUrl) {
-        // Log cấu trúc content để debug khi cần
         if (msgType === 'share.file') {
+          // Log đầy đủ để debug
           console.log(`   ↳ share.file nhưng không tìm thấy URL. Keys: ${Object.keys(content).join(',')}`);
+          console.log(`   ↳ Content sample:`, JSON.stringify(content).slice(0, 300));
         }
         return;
       }
 
-      // ── Chỉ xử lý Excel ──
+      // ── Chỉ xử lý Excel (từ nhóm được phép) ──
       if (!/\.(xlsx|xls)$/i.test(fileName)) {
-        console.log(`⏭️  Bỏ qua file không phải Excel: ${fileName}`);
+        if (msgType === 'share.file') {
+          console.log(`⏭️  Bỏ qua file không phải Excel: ${fileName}`);
+        }
         return;
       }
+      // Xác nhận nhận file từ đúng nhóm
+      console.log(`\n📎 [OK] File Excel từ ${senderName} | nhóm ${threadId} | ${fileName}`);
 
-      console.log(`\n📎 Nhận file từ ${senderName} (nhóm: ${threadId}): ${fileName}`);
+      // (log đã thêm ở trên)
       await sendMsg(api, `⏳ Đang xử lý file "${fileName}"...`, threadId, threadType);
 
       try {
@@ -187,6 +192,16 @@ async function main() {
   // Gán api vào biến global để HTTP server dùng được
   _botApi   = api;
   _botGroup = process.env.ALLOWED_GROUP_ID || '';
+
+  // ─── Kiểm tra ngay khi khởi động: nếu trễ ≤30 phút so với giờ định kỳ → gửi luôn
+  const startNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+  const sh = startNow.getHours(), sm = startNow.getMinutes();
+  const missedMorning = (sh === 7 && sm >= 5) || (sh === 7 && sm <= 35) || (sh === 8 && sm <= 5);
+  const missedEvening = (sh === 18 && sm <= 30) || (sh === 17 && sm >= 59);
+  if (_botGroup && (missedMorning || missedEvening)) {
+    console.log(`[Startup] Phát hiện khởi động lúc ${sh}:${sm.toString().padStart(2,'0')} VN — gửi báo cáo bù...`);
+    setTimeout(() => sendDailyReport(api, _botGroup).catch(e => console.error('[Startup]', e.message)), 5000);
+  }
 
   // ─── Lịch báo cáo sáng 07:05 ────────────────────────────────────────────
   scheduleDailyReport(api);
@@ -253,12 +268,13 @@ async function sendDailyReport(api, groupId) {
     const timeStr = `${now.getHours()}:${now.getMinutes().toString().padStart(2,'0')}`;
     const lines = [`📊 BÁO CÁO CONTAINER SIDV`, `📅 ${dateStr} — ${timeStr}`, ``];
 
-    // Chi tiết từng session
-    if (stats.sessions && stats.sessions.length > 0) {
-      stats.sessions.forEach(s => {
-        const pct    = s.total ? Math.round(s.done / s.total * 100) : 0;
-        const status = s.remaining === 0 ? '✅' : '🔄';
-        lines.push(`${status} ${s.name}`);
+    // Chi tiết từng session — chỉ hiển thị list CÒN CHƯA XONG
+    const pending = (stats.sessions || []).filter(s => s.remaining > 0);
+    if (pending.length > 0) {
+      lines.push(`📋 Các list chưa kéo xong (${pending.length} list):`);
+      pending.forEach(s => {
+        const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
+        lines.push(`🔄 ${s.name}`);
         lines.push(`   ${s.done}/${s.total} cont — còn ${s.remaining} (${pct}%)`);
       });
       lines.push('');
