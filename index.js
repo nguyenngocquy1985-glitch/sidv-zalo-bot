@@ -31,6 +31,12 @@ http.createServer(async (req, res) => {
     console.log('[HTTP] /send-report triggered');
     if (_botApi && _botGroup) await sendDailyReport(_botApi, _botGroup).catch(e => console.error('[HTTP] Lỗi:', e.message));
     else console.warn('[HTTP] Bot chưa ready');
+  } else if (req.method === 'POST' && req.url === '/send-ncc-report') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    console.log('[HTTP] /send-ncc-report triggered');
+    if (_botApi && _botGroup) await sendNccReport(_botApi, _botGroup).catch(e => console.error('[HTTP] Lỗi NCC:', e.message));
+    else console.warn('[HTTP] Bot chưa ready');
   } else {
     res.writeHead(200); res.end('SIDV Bot OK');
   }
@@ -98,12 +104,15 @@ async function main() {
         return; // bỏ qua nhóm khác, không cần log thêm
       }
 
-      // ── Lệnh text: !baocao ──
+      // ── Lệnh text: !baocao / !ncc ──
       if (typeof content === 'string') {
         const cmd = content.trim().toLowerCase();
         if (cmd === '!baocao' || cmd === 'baocao') {
           console.log(`[CMD] !baocao từ ${senderName}`);
           await sendDailyReport(api, threadId);
+        } else if (cmd === '!ncc' || cmd === 'ncc') {
+          console.log(`[CMD] !ncc từ ${senderName}`);
+          await sendNccReport(api, threadId);
         }
         return;
       }
@@ -197,10 +206,19 @@ async function main() {
   const startNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
   const sh = startNow.getHours(), sm = startNow.getMinutes();
   const missedMorning = (sh === 7 && sm >= 5) || (sh === 7 && sm <= 35) || (sh === 8 && sm <= 5);
+  const missedNcc08   = (sh === 8  && sm >= 0  && sm <= 30);  // trễ báo cáo NCC 08:00
   const missedEvening = (sh === 18 && sm <= 30) || (sh === 17 && sm >= 59);
   if (_botGroup && (missedMorning || missedEvening)) {
     console.log(`[Startup] Phát hiện khởi động lúc ${sh}:${sm.toString().padStart(2,'0')} VN — gửi báo cáo bù...`);
     setTimeout(() => sendDailyReport(api, _botGroup).catch(e => console.error('[Startup]', e.message)), 5000);
+  }
+  if (_botGroup && missedNcc08) {
+    console.log(`[Startup] Trễ báo cáo NCC 08:00 — gửi bù NCC report...`);
+    setTimeout(() => sendNccReport(api, _botGroup).catch(e => console.error('[Startup NCC]', e.message)), 8000);
+  }
+  if (_botGroup && missedEvening) {
+    console.log(`[Startup] Trễ 18:00 — gửi bù NCC report...`);
+    setTimeout(() => sendNccReport(api, _botGroup).catch(e => console.error('[Startup NCC]', e.message)), 10000);
   }
 
   // ─── Lịch báo cáo sáng 07:05 ────────────────────────────────────────────
@@ -218,24 +236,36 @@ async function main() {
 function scheduleDailyReport(api) {
   const GROUP_ID = process.env.ALLOWED_GROUP_ID || '';
   if (!GROUP_ID) {
-    console.log('⚠️  ALLOWED_GROUP_ID chưa set — bỏ qua lịch báo cáo sáng');
+    console.log('⚠️  ALLOWED_GROUP_ID chưa set — bỏ qua lịch báo cáo');
     return;
   }
-  const reported = new Set(); // key: "ngày-giờ" — tránh gửi 2 lần
-  console.log('⏰ Lịch báo cáo 07:05 và 18:00 hàng ngày → nhóm', GROUP_ID);
+  const reported = new Set(); // key: "ngày-slot" — tránh gửi 2 lần
+  console.log('⏰ Lịch: 07:05 tiến độ | 08:00 NCC | 18:00 tiến độ + NCC — nhóm', GROUP_ID);
 
   setInterval(async () => {
     // Lấy giờ VN (UTC+7)
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
     const h = now.getHours(), m = now.getMinutes(), d = now.getDate();
-    const is0705 = (h === 7  && m === 5);
-    const is1800 = (h === 18 && m === 0);
-    const key = `${d}-${h}`;
+    const is0705 = (h === 7  && m === 5);   // Báo cáo tiến độ buổi sáng
+    const is0800 = (h === 8  && m === 0);   // Báo cáo NCC buổi sáng
+    const is1800 = (h === 18 && m === 0);   // Báo cáo tiến độ + NCC buổi tối
 
-    if ((is0705 || is1800) && !reported.has(key)) {
-      reported.add(key);
-      console.log(`[DailyReport] ${h}:${m.toString().padStart(2,'0')} — Gửi báo cáo...`);
-      await sendDailyReport(api, GROUP_ID);
+    if (is0705 && !reported.has(`${d}-0705`)) {
+      reported.add(`${d}-0705`);
+      console.log(`[DailyReport 07:05] Gửi báo cáo tiến độ...`);
+      await sendDailyReport(api, GROUP_ID).catch(e => console.error('[07:05]', e.message));
+    }
+    if (is0800 && !reported.has(`${d}-0800`)) {
+      reported.add(`${d}-0800`);
+      console.log(`[NccReport 08:00] Gửi báo cáo NCC...`);
+      await sendNccReport(api, GROUP_ID).catch(e => console.error('[08:00]', e.message));
+    }
+    if (is1800 && !reported.has(`${d}-1800`)) {
+      reported.add(`${d}-1800`);
+      console.log(`[DailyReport 18:00] Gửi báo cáo tiến độ + NCC...`);
+      await sendDailyReport(api, GROUP_ID).catch(e => console.error('[18:00 progress]', e.message));
+      await new Promise(r => setTimeout(r, 2000)); // chờ 2s giữa 2 tin
+      await sendNccReport(api, GROUP_ID).catch(e => console.error('[18:00 ncc]', e.message));
     }
     // Dọn key cũ (chỉ giữ của ngày hôm nay)
     for (const k of reported) { if (!k.startsWith(`${d}-`)) reported.delete(k); }
@@ -293,6 +323,62 @@ async function sendDailyReport(api, groupId) {
     try {
       await api.sendMessage(
         { msg: `⚠️ Lỗi đọc báo cáo SIDV: ${err.message}` },
+        groupId, ThreadType.Group
+      );
+    } catch {}
+  }
+}
+
+async function fetchNccReport() {
+  const url = process.env.SHEETS_URL + '?action=getNccReport';
+  const res  = await fetch(url);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const text = await res.text();
+  return JSON.parse(text);
+}
+
+async function sendNccReport(api, groupId) {
+  try {
+    const data = await fetchNccReport();
+    const now  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    const timeStr = `${now.getHours()}:${now.getMinutes().toString().padStart(2,'0')}`;
+
+    if (!data.ok) {
+      await api.sendMessage(
+        { msg: `📊 Báo cáo NCC SIDV\n⚠️ Chưa có dữ liệu: ${data.error || ''}` },
+        groupId, ThreadType.Group
+      );
+      return;
+    }
+
+    const { total, period, byNCC } = data;
+    const lines = [
+      `📦 THỐNG KÊ KÉO VỎ THEO NCC`,
+      `🗓  ${period.from} → ${period.to}`,
+      `✅ Tổng: ${total} cont`,
+      ``
+    ];
+
+    if (byNCC && byNCC.length > 0) {
+      byNCC.forEach(({ name, count }) => {
+        const bar = '█'.repeat(Math.min(Math.round(count / Math.max(total, 1) * 10), 10));
+        lines.push(`• ${name}: ${count} cont`);
+      });
+    } else {
+      lines.push(`(Chưa có dữ liệu trong kỳ này)`);
+    }
+
+    lines.push(``);
+    lines.push(`🕐 ${timeStr}`);
+
+    await api.sendMessage({ msg: lines.join('\n') }, groupId, ThreadType.Group);
+    console.log('[NccReport] ✅ Đã gửi báo cáo NCC');
+
+  } catch (err) {
+    console.error('[NccReport] ❌ Lỗi:', err.message);
+    try {
+      await api.sendMessage(
+        { msg: `⚠️ Lỗi báo cáo NCC SIDV: ${err.message}` },
         groupId, ThreadType.Group
       );
     } catch {}
