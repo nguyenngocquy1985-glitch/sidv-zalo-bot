@@ -329,29 +329,23 @@ async function sendDailyReport(api, groupId) {
   }
 }
 
-async function fetchNccReport() {
-  const url = process.env.SHEETS_URL + '?action=getNccReport';
-  const res  = await fetch(url);
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const text = await res.text();
-  return JSON.parse(text);
-}
-
 async function sendNccReport(api, groupId) {
   try {
-    const data = await fetchNccReport();
-    const now  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    // Đọc từ getStats — nccReport được tracker tính và gắn vào khi sync Sheets
+    const stats = await fetchStats();
+    const now   = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
     const timeStr = `${now.getHours()}:${now.getMinutes().toString().padStart(2,'0')}`;
 
-    if (!data.ok) {
+    const ncc = stats.nccReport;
+    if (!stats.ok || !ncc) {
       await api.sendMessage(
-        { msg: `📊 Báo cáo NCC SIDV\n⚠️ Chưa có dữ liệu: ${data.error || ''}` },
+        { msg: `📦 Báo cáo NCC SIDV\n⚠️ Chưa có dữ liệu NCC. Mở tracker → bấm "☁️ Sync Sheets" để cập nhật.` },
         groupId, ThreadType.Group
       );
       return;
     }
 
-    const { total, period, byNCC } = data;
+    const { total, period, byNCC } = ncc;
     const lines = [
       `📦 THỐNG KÊ KÉO VỎ THEO NCC`,
       `🗓  ${period.from} → ${period.to}`,
@@ -361,7 +355,6 @@ async function sendNccReport(api, groupId) {
 
     if (byNCC && byNCC.length > 0) {
       byNCC.forEach(({ name, count }) => {
-        const bar = '█'.repeat(Math.min(Math.round(count / Math.max(total, 1) * 10), 10));
         lines.push(`• ${name}: ${count} cont`);
       });
     } else {
