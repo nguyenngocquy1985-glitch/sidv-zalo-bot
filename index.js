@@ -111,7 +111,8 @@ async function main() {
       const isGroup    = threadType === ThreadType.Group;
 
       // ── Log mọi tin nhắn (để tìm Group ID) ──
-      console.log(`📨 [${isGroup ? 'GRP' : 'USR'}] threadId=${threadId} | ${senderName} | msgType="${msgType}"`);
+      const contentPreview = typeof content === 'string' ? content.slice(0, 50) : (content ? `[${typeof content}] ${JSON.stringify(content).slice(0, 80)}` : 'null');
+      console.log(`📨 [${isGroup ? 'GRP' : 'USR'}] threadId=${threadId} | ${senderName} | msgType="${msgType}" | content=${contentPreview}`);
 
       // ── Filter: chỉ xử lý nhóm được phép (nếu đã cấu hình) ──
       if (ALLOWED_GROUP && isGroup && threadId !== ALLOWED_GROUP) {
