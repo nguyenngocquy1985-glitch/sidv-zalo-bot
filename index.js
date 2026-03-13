@@ -146,7 +146,7 @@ async function main() {
       if (cmd) {
         if (cmd === '!baocao' || cmd === 'baocao') {
           console.log(`[CMD] !baocao từ ${senderName}`);
-          await sendDailyReport(api, threadId);
+          await handleBaocaoWithYardExport(api, threadId);
         } else if (cmd === '!ncc' || cmd === 'ncc') {
           console.log(`[CMD] !ncc từ ${senderName}`);
           await sendNccReport(api, threadId);
@@ -315,6 +315,59 @@ async function fetchStats() {
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const text = await res.text();
   return JSON.parse(text);
+}
+
+// ─── !baocao → request yard export → poll → send report ──────────────────────
+async function handleBaocaoWithYardExport(api, groupId) {
+  const SHEETS = process.env.SHEETS_URL;
+  if (!SHEETS) {
+    console.log('[!baocao] Không có SHEETS_URL, gửi báo cáo trực tiếp');
+    return sendDailyReport(api, groupId);
+  }
+
+  try {
+    // 1. Gửi request export
+    console.log('[!baocao] Gửi requestYardExport...');
+    await fetch(SHEETS, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'requestYardExport', status: 'requested' })
+    });
+    await sendMsg(api, '⏳ Đang export dữ liệu mới từ YARD SYSTEM...\n(Chờ tối đa 3 phút)', groupId, 2);
+
+    // 2. Poll mỗi 10s, tối đa 3 phút (18 lần)
+    const MAX_POLLS = 18;
+    const POLL_INTERVAL = 10000;
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+      try {
+        const res = await fetch(`${SHEETS}?action=getYardExportStatus`);
+        const data = JSON.parse(await res.text());
+        const req = data.request;
+        if (req && req.status === 'done') {
+          console.log('[!baocao] Yard export hoàn tất, gửi báo cáo...');
+          return sendDailyReport(api, groupId);
+        }
+        if (req && req.status === 'error') {
+          console.log('[!baocao] Yard export lỗi:', req.error);
+          await sendMsg(api, `⚠️ Export YARD lỗi: ${req.error}\nGửi báo cáo với dữ liệu hiện có...`, groupId, 2);
+          return sendDailyReport(api, groupId);
+        }
+        console.log(`[!baocao] Poll ${i+1}/${MAX_POLLS} — status: ${req?.status || 'null'}`);
+      } catch (e) {
+        console.log(`[!baocao] Poll ${i+1} lỗi: ${e.message}`);
+      }
+    }
+
+    // 3. Timeout — gửi báo cáo với cảnh báo
+    console.log('[!baocao] Timeout 3 phút, gửi báo cáo với dữ liệu hiện có');
+    await sendMsg(api, '⚠️ Timeout export YARD (3 phút). Gửi báo cáo với dữ liệu hiện có...', groupId, 2);
+    return sendDailyReport(api, groupId);
+
+  } catch (err) {
+    console.error('[!baocao] Lỗi:', err.message);
+    await sendMsg(api, '⚠️ Không thể request export YARD. Gửi báo cáo với dữ liệu hiện có...', groupId, 2);
+    return sendDailyReport(api, groupId);
+  }
 }
 
 async function sendDailyReport(api, groupId) {
