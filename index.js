@@ -114,38 +114,36 @@ async function main() {
       const contentPreview = typeof content === 'string' ? content.slice(0, 50) : (content ? `[${typeof content}] ${JSON.stringify(content).slice(0, 80)}` : 'null');
       console.log(`📨 [${isGroup ? 'GRP' : 'USR'}] threadId=${threadId} | ${senderName} | msgType="${msgType}" | content=${contentPreview}`);
 
-      // ── Filter: chỉ xử lý nhóm được phép (nếu đã cấu hình) ──
-      if (ALLOWED_GROUP && isGroup && threadId !== ALLOWED_GROUP) {
-        return; // bỏ qua nhóm khác, không cần log thêm
+      // ── Trích xuất text từ content (hỗ trợ nhiều format zca-js) ──
+      const textBody = typeof content === 'string' ? content
+        : (content?.text || content?.msg || content?.message || content?.content || null);
+      const cmd = (textBody && typeof textBody === 'string') ? textBody.trim().toLowerCase() : '';
+
+      // ── !setgroup — LUÔN xử lý trước filter nhóm (để có thể đổi nhóm) ──
+      if (cmd === '!setgroup' && isGroup) {
+        console.log(`[CMD] !setgroup từ ${senderName} trong nhóm ${threadId}`);
+        ALLOWED_GROUP = String(threadId);
+        _botGroup = String(threadId);
+        try {
+          await fetch(process.env.SHEETS_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action: 'setBotConfig', entries: { bot_allowed_group: String(threadId) } })
+          });
+          await sendMsg(api, `✅ Đã đăng ký nhóm này làm nhóm chính!\n🆔 Group ID: ${threadId}\n\nBot sẽ CHỈ nhận file Excel và gửi báo cáo trong nhóm này.`, threadId, threadType);
+          console.log(`✅ Đã lưu ALLOWED_GROUP = ${threadId} vào Sheets`);
+        } catch (err) {
+          await sendMsg(api, `⚠️ Đã set nhóm tạm thời (mất khi restart).\nLỗi lưu Sheets: ${err.message}`, threadId, threadType);
+        }
+        return;
       }
 
-      // ── Lệnh text: !setgroup / !baocao / !ncc ──
-      // content có thể là string (DM) hoặc object (group: {text:..., msg:...})
-      const textBody = typeof content === 'string' ? content
-        : (content?.text || content?.msg || content?.message || null);
-      if (textBody && typeof textBody === 'string') {
-        const cmd = textBody.trim().toLowerCase();
+      // ── Filter: chỉ xử lý nhóm được phép (nếu đã cấu hình) ──
+      if (ALLOWED_GROUP && isGroup && String(threadId) !== String(ALLOWED_GROUP)) {
+        return;
+      }
 
-        // ── !setgroup — đăng ký nhóm hiện tại làm nhóm chính ──
-        if (cmd === '!setgroup' && isGroup) {
-          console.log(`[CMD] !setgroup từ ${senderName} trong nhóm ${threadId}`);
-          ALLOWED_GROUP = threadId;
-          _botGroup = threadId;
-          // Lưu vào Google Sheets (persistent)
-          try {
-            await fetch(process.env.SHEETS_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'setBotConfig', entries: { bot_allowed_group: threadId } })
-            });
-            await sendMsg(api, `✅ Đã đăng ký nhóm này làm nhóm chính!\n🆔 Group ID: ${threadId}\n\nBot sẽ CHỈ nhận file Excel và gửi báo cáo trong nhóm này.`, threadId, threadType);
-            console.log(`✅ Đã lưu ALLOWED_GROUP = ${threadId} vào Sheets`);
-          } catch (err) {
-            await sendMsg(api, `⚠️ Đã set nhóm tạm thời (mất khi restart).\nLỗi lưu Sheets: ${err.message}`, threadId, threadType);
-          }
-          return;
-        }
-
+      // ── Lệnh text: !baocao / !ncc ──
+      if (cmd) {
         if (cmd === '!baocao' || cmd === 'baocao') {
           console.log(`[CMD] !baocao từ ${senderName}`);
           await sendDailyReport(api, threadId);
@@ -153,7 +151,7 @@ async function main() {
           console.log(`[CMD] !ncc từ ${senderName}`);
           await sendNccReport(api, threadId);
         }
-        return;
+        if (cmd.startsWith('!')) return;
       }
 
       // ── Chỉ xử lý khi content là object (file/ảnh/voice, không phải text) ──
@@ -273,11 +271,11 @@ async function main() {
 // ─── Báo cáo sáng 07:05 ─────────────────────────────────────────────────────
 
 function scheduleDailyReport(api) {
-  const GROUP_ID = process.env.ALLOWED_GROUP_ID || '';
-  if (!GROUP_ID) {
-    console.log('⚠️  ALLOWED_GROUP_ID chưa set — bỏ qua lịch báo cáo');
+  if (!_botGroup) {
+    console.log('⚠️  Chưa có nhóm chính — bỏ qua lịch báo cáo');
     return;
   }
+  const GROUP_ID = _botGroup;
   const reported = new Set(); // key: "ngày-slot" — tránh gửi 2 lần
   console.log('⏰ Lịch: 07:05 tiến độ | 08:00 NCC | 18:00 tiến độ + NCC — nhóm', GROUP_ID);
 
